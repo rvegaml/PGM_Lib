@@ -60,6 +60,8 @@ for subject_id in Diagnosis_dict.keys():
 		y = np.vstack([y, np.array([Diagnosis_dict[subject_id]])])
 
 cardinality = np.int16(np.concatenate([np.ones(num_discrete)*3, np.ones(num_cont)]))
+weights = np.sqrt(cardinality)
+
 y = np.reshape(y, (-1))
 
 # Divide the data into train and test
@@ -70,14 +72,16 @@ X_train, X_test, Y_train, Y_test = train_test_split(X, y, test_size=0.2, stratif
 HC = Y_train==0
 SCZ = Y_train==1
 
-graph_HC = Mixed_MRF()
-graph_HC.train(X_train[HC, :], cardinality, weights, reg_param=.01)
+graph_HC = Mixed_MRF(cardinality)
+graph_HC.train(X_train[HC, :], weights, reg_param=.01, batch_size = 30, 
+	starter_learning_rate = .01, num_iter=20000)
 
-graph_SCZ = Mixed_MRF()
-graph_SCZ.train(X_train[SCZ, :], cardinality, weights, reg_param=.01)
+graph_SCZ = Mixed_MRF(cardinality)
+graph_SCZ.train(X_train[SCZ, :], weights, reg_param=.01, batch_size = 30, 
+	starter_learning_rate = .01, num_iter=20000)
 
-likelihood_1 = graph_1.compute_mixed_loglikelihood(X_test)
-likelihood_2 = graph_2.compute_mixed_loglikelihood(X_test)
+likelihood_1 = graph_HC.compute_mixed_loglikelihood(X_test)
+likelihood_2 = graph_SCZ.compute_mixed_loglikelihood(X_test)
 
 Y_pred = (likelihood_2 > likelihood_1) + 0
 

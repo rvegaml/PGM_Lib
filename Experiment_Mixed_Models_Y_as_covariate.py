@@ -93,7 +93,7 @@ for train_index, test_index in skf.split(X, y):
 
 		# Train the models
 		graph = Mixed_MRF_2(all_card)
-		graph.train(all_train, reg_param=.reg_param, num_iter=20000)
+		graph.train(all_train, reg_param=reg_param, num_iter=20000)
 
 
 		# Make predictions on the train and test set

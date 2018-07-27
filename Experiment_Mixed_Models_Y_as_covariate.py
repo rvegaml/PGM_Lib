@@ -7,6 +7,9 @@ from trainSVM import trainSVM
 from PGM_functions import prob_X_given_rest
 import pickle
 import pandas as pd
+import sys
+
+atlas_name = sys.argv[1]
 
 # Load the ReHo data
 avg_signal_covaried_dict = pickle.load(open('./obj_szReho_0.01-0.08_avg_signal_covaried_dict.pkl', 'rb'))
@@ -14,7 +17,7 @@ avg_signal_covaried_dict = pickle.load(open('./obj_szReho_0.01-0.08_avg_signal_c
 print(avg_signal_covaried_dict.keys())
 
 # Select a particular atlas
-harvard_cort_25 = avg_signal_covaried_dict['harvard_cort_25']
+harvard_cort_25 = avg_signal_covaried_dict[atlas_name]
 # Extract the number of continuous variables
 num_cont = harvard_cort_25.shape[1]
 

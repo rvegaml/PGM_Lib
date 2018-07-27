@@ -107,7 +107,7 @@ for train_index, test_index in skf.split(X, y):
 
 	acc_train[iteration] = np.sum(predictions == all_train[:, 0])/num_instances
 
-	all_test = np.hstack([np.reshape(Y_test, (-1,1)), X_test])
+	all_test = np.hstack([np.reshape(y_test, (-1,1)), X_test])
 	num_instances = all_test.shape[0]
 	predictions = np.zeros(num_instances)
 	var = 0

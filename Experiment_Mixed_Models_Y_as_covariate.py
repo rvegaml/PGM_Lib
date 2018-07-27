@@ -69,68 +69,80 @@ y = np.reshape(y, (-1))
 # -----------------------------------------------------------------
 # Train the models
 # -----------------------------------------------------------------
+
+reg_params = np.array([.01, .05, .1, .15, .3])
+num_params = len(reg_params)
+
 n_splits = 5
 
 skf = StratifiedKFold(n_splits=n_splits)
 iteration = 0
-acc_train = np.zeros(n_splits)
-acc_test = np.zeros(n_splits)
+acc_train = np.zeros(num_params, n_splits)
+acc_test = np.zeros(num_params, n_splits)
 
 for train_index, test_index in skf.split(X, y):
-	X_train, X_test = X[train_index,:], X[test_index,:]
-	y_train, y_test = y[train_index], y[test_index]
+	reg_counter = 0
 
-	# Build a new model including the Y as part of the graphical model
-	all_train = np.hstack([np.reshape(y_train, (-1,1)), X_train])
-	all_card = np.concatenate([[2], cardinality])
+	for reg_param in reg_params:
+		X_train, X_test = X[train_index,:], X[test_index,:]
+		y_train, y_test = y[train_index], y[test_index]
 
-	# Train the models
-	graph = Mixed_MRF_2(all_card)
-	graph.train(all_train, reg_param=.01, num_iter=20000)
+		# Build a new model including the Y as part of the graphical model
+		all_train = np.hstack([np.reshape(y_train, (-1,1)), X_train])
+		all_card = np.concatenate([[2], cardinality])
+
+		# Train the models
+		graph = Mixed_MRF_2(all_card)
+		graph.train(all_train, reg_param=.reg_param, num_iter=20000)
 
 
-	# Make predictions on the train and test set
-	num_instances = all_train.shape[0]
-	predictions = np.zeros(num_instances)
-	var = 0
+		# Make predictions on the train and test set
+		num_instances = all_train.shape[0]
+		predictions = np.zeros(num_instances)
+		var = 0
 
-	for i in range(num_instances):
-		c_instance = np.array([all_train[i, :]])
-		
-		prob = prob_X_given_rest(var, c_instance, graph.cardinality, 
-			continuous_id=graph.continuous_id, J=graph.J, 
-			alpha=graph.alpha, discrete_factors=graph.discrete_factors,
-			mixed_factors=graph.mixed_factors)
-		
-		if prob[0][1] > prob[0][0]:
-			predictions[i] = 1
+		for i in range(num_instances):
+			c_instance = np.array([all_train[i, :]])
+			
+			prob = prob_X_given_rest(var, c_instance, graph.cardinality, 
+				continuous_id=graph.continuous_id, J=graph.J, 
+				alpha=graph.alpha, discrete_factors=graph.discrete_factors,
+				mixed_factors=graph.mixed_factors)
+			
+			if prob[0][1] > prob[0][0]:
+				predictions[i] = 1
 
-	acc_train[iteration] = np.sum(predictions == all_train[:, 0])/num_instances
+		acc_train[reg_counter, iteration] = np.sum(predictions == all_train[:, 0])/num_instances
 
-	all_test = np.hstack([np.reshape(y_test, (-1,1)), X_test])
-	num_instances = all_test.shape[0]
-	predictions = np.zeros(num_instances)
-	var = 0
+		all_test = np.hstack([np.reshape(y_test, (-1,1)), X_test])
+		num_instances = all_test.shape[0]
+		predictions = np.zeros(num_instances)
+		var = 0
 
-	for i in range(num_instances):
-		c_instance = np.array([all_test[i, :]])
-		
-		prob = prob_X_given_rest(var, c_instance, graph.cardinality, 
-			continuous_id=graph.continuous_id, J=graph.J, 
-			alpha=graph.alpha, discrete_factors=graph.discrete_factors,
-			mixed_factors=graph.mixed_factors)
-		
-		if prob[0][1] > prob[0][0]:
-			predictions[i] = 1
+		for i in range(num_instances):
+			c_instance = np.array([all_test[i, :]])
+			
+			prob = prob_X_given_rest(var, c_instance, graph.cardinality, 
+				continuous_id=graph.continuous_id, J=graph.J, 
+				alpha=graph.alpha, discrete_factors=graph.discrete_factors,
+				mixed_factors=graph.mixed_factors)
+			
+			if prob[0][1] > prob[0][0]:
+				predictions[i] = 1
 
-	acc_test[iteration] = np.sum(predictions == all_test[:, 0])/num_instances
+		acc_test[reg_counter, iteration] = np.sum(predictions == all_test[:, 0])/num_instances
 
-	print('Iteration: {0:d}'.format(iteration))
-	print('Train accuracy: {0:f}'.format(acc_train[iteration]))
-	print('Test accuracy: {0:f}'.format(acc_test[iteration]))
-	print('\n')
+		# print('Iteration: {0:d}'.format(iteration))
+		# print('Train accuracy: {0:f}'.format(acc_train[iteration]))
+		# print('Test accuracy: {0:f}'.format(acc_test[iteration]))
+		# print('\n')
+
+		reg_counter +=1
 
 	iteration += 1
 
-print('Cross validation train: {0:f}'.format(np.mean(acc_train)))
-print('Cross validation test: {0:f}'.format(np.mean(acc_test)))
+for i in range(num_params):
+	print('Regularization:')
+	print(reg_params[i])
+	print('Cross validation train: {0:f}'.format(np.mean(acc_train[i, :])))
+	print('Cross validation test: {0:f}'.format(np.mean(acc_test[i, :])))

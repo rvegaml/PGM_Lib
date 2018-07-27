@@ -1,10 +1,12 @@
 from __future__ import division
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
-from models import Linear_Regression_Group_LASSO, Multiclass_Logistic_Regression_Group_LASSO
+from optimization_lib import Linear_Regression_Group_LASSO, Multiclass_Logistic_Regression_Group_LASSO
 from models import f_c_softmax_Group_LASSO
 from scipy.stats import multivariate_normal
 import tensorflow as tf
+from scipy.stats import norm
+from optimization_lib import softmax
 
 class Factor():
 	def __init__(self, variables, cardinality, values=[]):
@@ -79,17 +81,17 @@ class Factor():
 		return self.assignment_to_index(assignment)
 	
 	# def assignment_to_one_hot_encoding(self, assignment):
-	# 	# Transform the current assignment to a one hot encoding.
-	# 	# Assignment is an array with len(self.variables) entries
-	# 	index = self.assignment_to_index(assignment)
+	#   # Transform the current assignment to a one hot encoding.
+	#   # Assignment is an array with len(self.variables) entries
+	#   index = self.assignment_to_index(assignment)
 		
-	# 	return self.onehot_encoder.transform(np.array(index))
+	#   return self.onehot_encoder.transform(np.array(index))
 		
 	# def full_assignment_to_one_hot_encoding(self, x):
-	# 	# Transform the current vector to a one hot encoding of the variables in the factor
-	# 	# x is an array that contains the entire instance
-	# 	assignment = x[:,self.variables]
-	# 	return self.assignment_to_one_hot_encoding(assignment)
+	#   # Transform the current vector to a one hot encoding of the variables in the factor
+	#   # x is an array that contains the entire instance
+	#   assignment = x[:,self.variables]
+	#   return self.assignment_to_one_hot_encoding(assignment)
 	
 	def get_value_assignment(self, assignment):
 		index = self.assignment_to_index(assignment)
@@ -184,7 +186,7 @@ class Mixed_MRF():
 
 		# Create the linear or multiclass logistic regression for each of the variables
 		for x_id in all_variables:
-			print('Variable {0:d} out of {1:d}'.format(x_id, len(all_variables)))
+			print('Variable {0:d} out of {1:d}'.format(x_id, len(all_variables)-1))
 			tf.reset_default_graph()
 			new_dataset, Y, features_card = transform_dataset(x_id, dataset, cardinality)
 
@@ -459,7 +461,41 @@ class Mixed_MRF():
 
 		return np.log(discrete_likelihood) + np.log(mixed_likelihood)
 
+	def compute_pseudo_loglikelihood(self, dataset):
+		num_instances = dataset.shape[0]
+		pseudo_loglikelihood = np.zeros(num_instances)
 
+		num_variables = len(self.cardinality)
+		
+		for i in range(num_instances):
+			sample = dataset[i, :]
+			evidence = np.array([sample])
+			c_pseudo_loglikelihood = 0
+
+			for x_id in range(num_variables):
+
+				c_card = self.cardinality[x_id]
+				params = prob_X_given_rest(x_id, evidence, self.cardinality, self.continuous_id, 
+					self.discrete_factors, self.mixed_factors, self.J, self.alpha)
+
+				if c_card == 1:
+					logProb = np.log(norm.pdf(params[0], params[1]))
+				else:
+					logProb = np.log(params[0][evidence[0, x_id]])
+
+				if np.isinf(logProb):
+					print('Instance : {0:d}'.format(i))
+					print(x_id)
+					print(params)
+					print(logProb)
+					print('\n')
+				
+			
+				c_pseudo_loglikelihood += logProb
+
+			pseudo_loglikelihood[i] = c_pseudo_loglikelihood
+	
+		return pseudo_loglikelihood
 
 class Discrete_MRF():
 	def __init__(self, factor_list=[], adj_matrix=[]):
@@ -705,7 +741,7 @@ def prob_X_given_rest(x_id, evidence, cardinality, continuous_id=[],
 			if x_id in factor.variables:
 				ro_mixed_factors += factor.get_value_full_assignment(evidence, cardinality)[0][0]
 
-		unnormalized_mu = ro_mixed_factors + c_alpha + np.dot(x_cont, np.reshape(w, (-1, 1)))
+		unnormalized_mu = ro_mixed_factors + c_alpha - np.dot(x_cont, np.reshape(w, (-1, 1)))
 
 		mu = unnormalized_mu/B_ss
 		sigma_sqrd = 1/B_ss
@@ -716,30 +752,26 @@ def prob_X_given_rest(x_id, evidence, cardinality, continuous_id=[],
 	else:
 		# Create the different assignemnts X and an array to store their probabilities
 		X_val = list(range(card_x_id))
-		X_prob = np.zeros(card_x_id)
-		
+		logit = np.zeros(card_x_id)
+
 		X_assignments = np.dot(np.ones((card_x_id,1)), np.reshape(evidence, (1,-1)))
 		X_assignments[:, x_id] = X_val
 
 		# Start by choosing the factors that contain x_id. The rest of the factor can be ignored
 		for factor in discrete_factors:
 			if x_id in factor.variables:
-				temp_val = factor.get_value_full_assignment(X_assignments, cardinality)
-				X_prob += np.reshape(temp_val,(-1))
+				temp_val = np.log(factor.get_value_full_assignment(X_assignments, cardinality))
+				logit += np.reshape(temp_val,(-1))
 
 		for factor in mixed_factors:
 			if x_id in factor.variables:
 				# Identify the other variable
 				other_var = np.setdiff1d(factor.variables, x_id)[0]
 				temp_val = factor.get_value_full_assignment(X_assignments, cardinality)
-				X_prob += np.reshape(temp_val,(-1))*evidence[0, other_var]
+				logit += np.reshape(temp_val,(-1))*evidence[0, other_var]
 		
-		X_prob = np.exp(X_prob)
-		
-		# Normalize the PMF
-		X_prob = X_prob / np.sum(X_prob)
-
-		parameters = [X_prob]
+		X_prob = softmax(np.array([logit]))
+		parameters = [X_prob[0]]
 	
 	return parameters
 
@@ -771,14 +803,17 @@ def Gibbs_sampling(initial_sample, T, cardinality, continuous_id=[],
 	discrete_factors=[], mixed_factors=[], J=[], alpha=[]):
 	# Identify the number of variables
 	num_var = initial_sample.shape[1]
+	prev_sample = np.array(initial_sample)
 	
 	# Generate a dataset with just zeros.
 	dataset = np.zeros((T, num_var))
 	
 	for i in range(T):
-		new_sample = Gibbs_generate_next_sample(initial_sample, cardinality, continuous_id,
+		new_sample = Gibbs_generate_next_sample(prev_sample, cardinality, continuous_id,
 			discrete_factors, mixed_factors, J, alpha)
 		dataset[i, :] = new_sample
+		
+		prev_sample = new_sample
 	
 	return dataset
 
@@ -903,6 +938,369 @@ def FactorMarginalization(factor, var_id, operation=np.sum):
 		new_factor.values[i] = val
 
 	return new_factor
+
+class Mixed_MRF_2():
+	'''
+		Class to learn and compute the likelihood of data combining discrente and continuous variables.
+	'''
+	def __init__(self, cardinality, discrete_factors=[], mixed_factors=[], J=[], alpha=[]):
+		'''
+			- discrete_factors is a list of pairwise factors for discrete variables
+			- mixed_factors is a list of pairwise factors between a discrete and a continuous variable
+			- J inverse of the covariance matrix of the continuous variables
+			- mu: vector with the mean value of the continuous variables
+		'''
+
+		# Identify the ID of the discrete and continuous variables
+		self.identify_continuous_discrete(cardinality)
+
+		self.discrete_factors = discrete_factors
+		self.mixed_factors = mixed_factors
+		self.J = J
+		self.alpha = alpha
+		self.cardinality = cardinality
+
+		# Compute the partition function of the discrete variables
+		if len(discrete_factors) == 0:
+			self.Z = 0
+		else:
+			self.Z = self.compute_partition_function(discrete_factors)
+
+	def compute_partition_function(self, factor_list):
+		# Compute the partition function for the entire distribution
+		jointDistribution = Factor(factor_list[0].variables, factor_list[0].cardinality, factor_list[0].values)
+
+		for i in range(len(factor_list)-1):
+			jointDistribution = FactorProduct(jointDistribution, factor_list[i+1])
+
+		Z = np.sum(jointDistribution.values)
+
+		return Z
+
+	def train(self, dataset, reg_param=.01, num_iter=100000):
+
+		# Function to learn the potentials of a pairwise graph given a dataset and a regularization parameter alpha
+		num_variables = dataset.shape[1]
+		pairwise_discrete_weights = []
+		node_discrete_weights = []
+		continuous_weights = []
+		continuous_bias = []
+		discrete_factors = []
+		mixed_factors = []
+		cardinality = self.cardinality
+
+		# Detect the number of features that are continuous
+		continuous_flag = (cardinality == 1)
+		num_continuous = np.sum(continuous_flag)
+
+		J = np.zeros((num_continuous, num_continuous))
+		alpha = np.zeros(num_continuous)
+
+		continuous_counter = 0
+
+		all_variables = list(range(num_variables))
+
+		# Create the linear or multiclass logistic regression for each of the variables
+		for x_id in all_variables:
+			print('Variable {0:d} out of {1:d}'.format(x_id, len(all_variables)-1))
+			new_dataset, Y, features_card = transform_dataset(x_id, dataset, cardinality)
+
+			c_card = cardinality[x_id]
+
+			if c_card == 1:
+				LinReg = Linear_Regression_Group_LASSO(features_card, reg_param)
+				LinReg.train(new_dataset, Y, max_iter=num_iter)
+				var_residuals = LinReg.compute_variance_residuals(new_dataset, Y)
+
+				J[continuous_counter, continuous_counter] = 1/var_residuals
+
+				continuous_counter +=1
+
+				final_bias = LinReg.W[0,0]
+				final_weights = np.reshape(LinReg.W[1:,0], (-1,1))
+
+				continuous_weights.append(final_weights/var_residuals)
+				continuous_bias.append(final_bias/var_residuals)
+			else:
+
+				LogReg = Multiclass_Logistic_Regression_Group_LASSO(features_card, reg_param)
+				LogReg.train(new_dataset, Y, max_iter=num_iter)
+
+				final_bias = LogReg.W[0,:]
+				final_weights = LogReg.W[1:,:]
+
+				pairwise_discrete_weights.append(final_weights)
+				node_discrete_weights.append(final_bias)
+
+		# Create an empty adjacency matrix
+		self.adj_matrix = np.zeros((num_variables, num_variables), dtype=np.int8)
+
+		# Create the Factors and the inverse covariance matrix
+		discrete_counter = 0
+		continuous_counter = 0
+
+		for x_id in range(num_variables):
+
+			c_card = cardinality[x_id]
+
+			if c_card == 1:
+
+				alpha[continuous_counter] = continuous_bias[continuous_counter]
+
+				rest_variables = all_variables[0:x_id] + all_variables[x_id+1:]
+
+				start_index = 0
+				next_cont = continuous_counter + 1
+
+				for y_id in rest_variables:
+					y_card = cardinality[y_id]
+					end_index = start_index + y_card
+
+					if y_id > x_id:
+						c_weights = continuous_weights[continuous_counter]
+						c_factor_values_mat = c_weights[start_index:end_index, :]
+						c_factor_values = np.reshape(c_factor_values_mat, (-1), order='C')
+
+						# Pairwise factor
+						if np.linalg.norm(c_factor_values) > 0:
+							self.adj_matrix[x_id, y_id] = 1
+							self.adj_matrix[y_id, x_id] = 1
+
+							if y_card > 1:
+								new_Factor = Factor(np.array([x_id, y_id]), 
+									np.array([cardinality[x_id], cardinality[y_id]]), 
+									c_factor_values)
+								mixed_factors.append(new_Factor)
+								
+						# Identify if this is a discrete or mixed factor.
+						if y_card == 1:
+							J[continuous_counter, next_cont] = -c_factor_values
+							J[next_cont, continuous_counter] = -c_factor_values
+							next_cont +=1
+
+					start_index = end_index
+
+
+				continuous_counter += 1
+
+			else:
+				# Node factor
+				new_Factor = Factor(np.array([x_id]), np.array([cardinality[x_id]]), np.exp(node_discrete_weights[discrete_counter]))
+				discrete_factors.append(new_Factor)
+
+				rest_variables = all_variables[0:x_id] + all_variables[x_id+1:]
+
+				start_index = 0
+
+				for y_id in rest_variables:
+					y_card = cardinality[y_id]
+					end_index = start_index + y_card
+
+					if y_id > x_id:
+						c_weights = pairwise_discrete_weights[discrete_counter]
+						c_factor_values_mat = c_weights[start_index:end_index, :]
+						c_factor_values = np.reshape(c_factor_values_mat, (-1), order='C')
+
+						# Pairwise factor
+						if np.linalg.norm(c_factor_values) > 0:
+							self.adj_matrix[x_id, y_id] = 1
+							self.adj_matrix[y_id, x_id] = 1
+							# Identify if this is a discrete or mixed factor.
+							if y_card == 1:
+								new_Factor = Factor(np.array([y_id, x_id]), 
+									np.array([cardinality[y_id], cardinality[x_id]]), 
+									c_factor_values)
+								mixed_factors.append(new_Factor)
+							else:
+								new_Factor = Factor(np.array([y_id, x_id]), 
+									np.array([cardinality[y_id], cardinality[x_id]]), 
+									np.exp(c_factor_values))
+								discrete_factors.append(new_Factor)
+					start_index = end_index
+
+				discrete_counter += 1
+
+
+		self.discrete_factors = discrete_factors
+		self.mixed_factors = mixed_factors
+		self.J = J
+		self.alpha = alpha
+		self.continuous_weights = continuous_weights
+		self.pairwise_discrete_weights = pairwise_discrete_weights
+
+		if (len(discrete_factors) != 0) or (len(mixed_factors) != 0):
+			self.Z = self.compute_partition_function(discrete_factors)
+
+
+	def identify_continuous_discrete(self, cardinality):
+		self.continuous_id = []
+		self.discrete_id = []
+
+		num_variables = len(cardinality)
+
+		for var in range(num_variables):
+			if cardinality[var] == 1:
+				self.continuous_id.append(var)
+			else:
+				self.discrete_id.append(var)
+
+		self.continuous_id = np.array(self.continuous_id)
+		self.discrete_id = np.array(self.discrete_id)
+
+	def compute_discrete_likelihood(self, dataset):
+		'''
+		Function that computes the likelihood of every instance in the dataset given a trained graph
+		'''
+		cardinality_discrete = self.cardinality[self.discrete_id]
+
+		var_id = self.discrete_id
+		instance_factor_list = self.discrete_factors
+		likelihood = np.zeros(dataset.shape[0])
+
+
+		for instance_id in range(dataset.shape[0]):
+			
+			instance = dataset[instance_id, :]
+
+			# Check that the instance has correct values (not greater than cardinality)
+			error_value_flag = np.greater_equal(instance[self.discrete_id], cardinality_discrete)
+			if np.any(error_value_flag):
+				likelihood[instance_id] = 1E-10
+			else:
+
+				instance_factor_list = self.discrete_factors
+
+				# Identify the variables whose values are missing
+				missing_flag = (instance == -1)
+				if np.any(missing_flag):
+					var_to_marginalize = var_id[missing_flag]
+				else:
+					var_to_marginalize = []
+
+				# Identify the factors that contain the variables to marginalize
+				factors_to_marginalze = []
+				other_factors = []
+
+				if len(var_to_marginalize) != 0:
+					for factor in self.discrete_factors:
+						if np.any(np.in1d(var_to_marginalize, factor.variables)):
+							factors_to_marginalze.append(factor)
+						else:
+							other_factors.append(factor)
+
+					# Marginalize all the missing variables
+					remaining_factors = []
+
+					for var in var_to_marginalize:
+						factors_with_c_variable = []
+
+						for factor in factors_to_marginalze:
+							if var in factor.variables:
+								factors_with_c_variable.append(factor)
+							else:
+								remaining_factors.append(factor)
+
+						# Multiply all the factor with the current variable
+						new_factor = factors_with_c_variable[0]
+
+						for i in range(len(factors_with_c_variable) - 1):
+							new_factor = FactorProduct(new_factor, factors_with_c_variable[i+1])
+
+						# Marginalize the current variable
+						new_factor = FactorMarginalization(new_factor, var, np.sum)
+						remaining_factors.append(new_factor)
+
+						factors_to_marginalze = remaining_factors
+						remaining_factors = []
+
+					# The new factor list are the factors after marginalization
+					instance_factor_list = factors_to_marginalze + other_factors
+
+
+				unnorm_likelihood = 0
+				for factor in instance_factor_list:
+					c_val = factor.get_value_full_assignment(
+						np.array([instance]), self.cardinality)[0][0]
+					unnorm_likelihood += np.log(c_val)
+
+				likelihood[instance_id] = np.exp(unnorm_likelihood) / self.Z
+
+		return likelihood
+
+	def compute_mixed_loglikelihood(self, dataset):
+		Sigma = np.linalg.inv(self.J)
+
+		num_variables = dataset.shape[1]
+		num_discrete = len(self.discrete_id)
+		num_continuous = len(self.continuous_id)
+
+		# Compute the likelihood of the discrete variables
+		discrete_likelihood = self.compute_discrete_likelihood(dataset)
+
+		# Now go to the mixed model
+		# Create a matrix that will contain all the rho vectors
+		rho_matrix = np.zeros((num_discrete, num_continuous))
+		mixed_likelihood = np.zeros(dataset.shape[0])
+
+		for i in range(dataset.shape[0]):
+			instance = dataset[i,:]
+
+			for factor in self.mixed_factors:
+				if factor.cardinality[0] == 1:
+					cont_var = factor.variables[0]
+					disc_var = factor.variables[1]
+				else:
+					cont_var = factor.variables[1]
+					disc_var= factor.variables[0]
+
+				cont_indx = np.where(self.continuous_id == cont_var)[0][0]
+				disc_indx = np.where(self.discrete_id == disc_var)[0][0]
+
+				rho_matrix[disc_indx, cont_indx] = factor.get_value_full_assignment(
+					np.array([instance]), self.cardinality)[0][0]
+
+			rho_vector = np.sum(rho_matrix, axis=0)
+			temp = self.alpha + rho_vector
+			x = instance[self.continuous_id]
+
+			c_mu = np.dot(Sigma, temp)
+			likelihood = multivariate_normal.pdf(x, c_mu, Sigma)
+
+			if likelihood < 1E-250:
+				mixed_likelihood[i] = 1E-250
+			else:
+				mixed_likelihood[i] = likelihood
+
+		return np.log(discrete_likelihood) + np.log(mixed_likelihood)
+
+	def compute_pseudo_loglikelihood(self, dataset):
+		num_instances = dataset.shape[0]
+		pseudo_loglikelihood = np.zeros(num_instances)
+
+		num_variables = len(self.cardinality)
+		
+		for i in range(num_instances):
+			sample = dataset[i, :]
+			evidence = np.array([sample])
+			c_pseudo_loglikelihood = 0
+
+			for x_id in range(num_variables):
+
+				c_card = self.cardinality[x_id]
+				params = prob_X_given_rest(x_id, evidence, self.cardinality, self.continuous_id, 
+					self.discrete_factors, self.mixed_factors, self.J, self.alpha)
+
+				if c_card == 1:
+					logProb = np.log(norm.pdf(params[0], params[1]))
+				else:
+					logProb = np.log(params[0][evidence[0, x_id]])
+				
+			
+				c_pseudo_loglikelihood += logProb
+
+			pseudo_loglikelihood[i] = c_pseudo_loglikelihood
+	
+		return pseudo_loglikelihood
 
 def main():
 	return -1

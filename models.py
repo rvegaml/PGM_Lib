@@ -39,7 +39,7 @@ class f_c_softmax_Group_LASSO():
 
 		self.prev_weights = tf.Variable(self.W_H1)
 
-	def train(self, optimizer_name, X, Y, num_iter=10000, batch_size=20, tol=1E-5, decay_steps=400, decay_rate=.96, starter_learning_rate=.001):
+	def train(self, optimizer_name, X, Y, num_iter=10000, batch_size=20, tol=1E-5, Pdecay_steps=400, decay_rate=.96, starter_learning_rate=.001):
 
 
 		# Get the number of samples of every hospital
@@ -179,13 +179,17 @@ class General_Model_Group_LASSO():
 
 		# Compute the regularization term
 
-		self.regularization = self.compute_regularization_term(self.W_H1, cardinality, weights)
+		self.regularization = tf.multiply(
+			tf.constant(alpha, dtype=tf.float32), 
+			self.compute_regularization_term(self.W_H1, cardinality, weights)
+			)
 
-		self.loss = ll_loss + tf.multiply(tf.constant(alpha, dtype=tf.float32), self.regularization)
+		self.loss = ll_loss + self.regularization
 
 		self.prev_weights = tf.Variable(self.W_H1)
 
-	def train(self, optimizer_name, X, Y, num_iter=10000, batch_size=20, tol=1E-5, decay_steps=400, decay_rate=.96, starter_learning_rate=.001):
+	def train(self, optimizer_name, X, Y, num_iter=10000, batch_size=20, tol=1E-5, decay_steps=400, decay_rate=.96, starter_learning_rate=.001, momentum=0.7,
+		zero_thresh=1E-5):
 		# Get the number of samples of every hospital
 		n_X = X.shape[0]
 
@@ -200,12 +204,14 @@ class General_Model_Group_LASSO():
 		learning_rate = tf.train.exponential_decay(learning_rate=starter_learning_rate, global_step=global_step, 
 			decay_steps=decay_steps, decay_rate=decay_rate, staircase=True)
 
-
-		optimizer = optimizer_name(learning_rate=learning_rate)
+		if optimizer_name == tf.train.MomentumOptimizer:
+			optimizer = optimizer_name(learning_rate=learning_rate, momentum=momentum)
+		else:
+			optimizer = optimizer_name(learning_rate=learning_rate)
 
 		trainStep = optimizer.minimize(self.loss)
 
-		threshold = 1E-3
+		threshold = zero_thresh
 		thresh_matrix = tf.cast(tf.greater(tf.abs(self.W_H1), threshold), tf.float32)
 		new_weights = tf.multiply(self.W_H1, thresh_matrix)
 
@@ -302,9 +308,13 @@ class Multiclass_Logistic_Regression_Group_LASSO(General_Model_Group_LASSO):
 
 		# Compute the regularization term
 
-		self.regularization = self.compute_regularization_term(self.W_H1, cardinality, weights)
+		self.regularization = tf.multiply(
+			tf.constant(alpha, dtype=tf.float32), 
+			self.compute_regularization_term(self.W_H1, cardinality, weights)
+			)
 
-		self.loss = ll_loss + tf.multiply(tf.constant(alpha, dtype=tf.float32), self.regularization)
+
+		self.loss = ll_loss + self.regularization
 		
 		correct_prediction_flag = tf.equal(tf.argmax(y_hat, 1), tf.argmax(self.Y,1))
 		self.accuracy = tf.reduce_mean(tf.cast(correct_prediction_flag, tf.float32))
@@ -330,13 +340,16 @@ class Linear_Regression_Group_LASSO(General_Model_Group_LASSO):
 			dim_out_class, tf.sigmoid)
 
 		# Compute the loss and accuracy
-		ll_loss = tf.reduce_mean(tf.nn.l2_loss(self.Y - z_hat))
+		ll_loss = tf.nn.l2_loss(self.Y - z_hat)
 
 		# Compute the regularization term
 
-		self.regularization = self.compute_regularization_term(self.W_H1, cardinality, weights)
+		self.regularization = tf.multiply(
+			tf.constant(alpha, dtype=tf.float32), 
+			self.compute_regularization_term(self.W_H1, cardinality, weights)
+			)
 
-		self.loss = ll_loss + tf.multiply(tf.constant(alpha, dtype=tf.float32), self.regularization)
+		self.loss = ll_loss + self.regularization
 
 		# Store the predictions
 		self.predictions = z_hat

@@ -77,8 +77,8 @@ n_splits = 5
 
 skf = StratifiedKFold(n_splits=n_splits)
 iteration = 0
-acc_train = np.zeros(num_params, n_splits)
-acc_test = np.zeros(num_params, n_splits)
+acc_train = np.zeros((num_params, n_splits))
+acc_test = np.zeros((num_params, n_splits))
 
 for train_index, test_index in skf.split(X, y):
 	reg_counter = 0

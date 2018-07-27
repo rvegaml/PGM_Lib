@@ -126,8 +126,8 @@ for train_index, test_index in skf.split(X, y):
 	acc_test[iteration] = np.sum(predictions == all_test[:, 0])/num_instances
 
 	print('Iteration: {0:d}'.format(iteration))
-	print('Train accuracy: {0:f}'.format(acc_train))
-	print('Test accuracy: {0:f}'.format(acc_test))
+	print('Train accuracy: {0:f}'.format(acc_train[iteration]))
+	print('Test accuracy: {0:f}'.format(acc_test[iteration]))
 	print('\n')
 
 print('Cross validation train: {0:f}'.format(np.mean(acc_train)))
